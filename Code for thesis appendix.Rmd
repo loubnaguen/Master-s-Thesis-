@@ -1,0 +1,909 @@
+---
+title: "Thesis work"
+author: "Loubna Guenoune"
+date: "2024-05-28"
+output: html_document
+---
+#Chapter two:
+cholera map
+```{r}
+library(cholera)
+rng <- mapRange()
+plot(fatalities[, c("x", "y")],
+  pch = 15, col = "black",
+  cex = 0.4, xlim = rng$x, ylim = rng$y, asp = 1,
+  frame.plot = TRUE, axes = FALSE
+)
+addRoads()
+```
+
+spatial neighbourhood distance measure map :
+
+```{r}
+nb <- dnearneigh(x = st_centroid(map), d1 = 0, d2 = 0.4)
+plot(st_geometry(map), border = "lightgray")
+plot.nb(nb, st_geometry(map), add = TRUE)
+```
+
+#Chapter 3 :
+
+
+```{r}
+library(tidyverse)
+library(sf)
+library(INLA)
+library(RColorBrewer)
+library(tmap)
+library(patchwork)
+library(rnaturalearth)
+library(terra)
+library(ggspatial)
+library(rnaturalearthdata)
+```
+
+```{r}
+library(readxl)
+final_data <-read_excel("C:/Users/Lenovo/Desktop/rédaction/Dataiowa.xlsx")
+```
+
+```{r}
+final_data$Corn_Yield<-as.numeric(final_data$Corn_Yield)
+
+```
+#Plotting the Corn yield for the whole state over the years :
+```{r}
+Data1 <- final_data %>%
+  group_by(YEAR) %>%
+  summarize(Corn_Yield = mean(as.numeric(Corn_Yield), na.rm = TRUE))  # Maybe use mean instead of sum
+
+ggplot(data = Data1, aes(x = YEAR, y = Corn_Yield)) +
+  # Theme with lighter background and grid
+  theme_bw() +
+  theme(
+    panel.background = element_rect(fill = "white"),
+    panel.grid.major.x = element_line(color = "gray80", linetype = "dashed"),
+    panel.grid.major.y = element_line(color = "gray80", linetype = "dashed")
+  ) +
+  # Customize line color and size
+  geom_line(color = "#377EB8", size = 1.2) +  # Adjust color (blue) and line thickness
+  # Add labels and title
+  labs(title = "Average Corn Yield in Iowa Over Time",
+       x = "Year",
+       y = "Corn Yield ") +
+  # Adjust x and y-axis appearance
+  scale_x_continuous(breaks = seq(min(Data1$YEAR), max(Data1$YEAR), by = 1)) +  # Adjust x-axis breaks for readability
+  scale_y_continuous() +
+  # Add theme elements (optional)
+  theme(plot.title = element_text(hjust = 0.5))  # Center title
+
+```
+
+```{r}
+
+library(GGally)
+# Customize the pairwise plot
+p <- ggpairs(
+  data = final_data, 
+  columns = c("Corn_Yield","Temp","precipitation","Hum","dlh","wind","DNI"),
+  upper = list(continuous = wrap("cor", size = 4, color = "darkslategray")),
+  lower = list(continuous = wrap("smooth", color = "steelblue")),
+  diag = list(continuous = wrap("barDiag", fill = "darkslategray"))
+) +
+  theme_bw() +
+  theme(
+    panel.background = element_rect(fill = "white", color = NA),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(color = "darkslategray"),
+    axis.title = element_text(color = "darkslategray"),
+    strip.background = element_rect(fill = "white", color = "gray70"),
+    strip.text = element_text(color = "darkslategray")
+  )
+
+# Save the plot with appropriate size for a Word document
+ggsave("pairwise_plot_classy.png", plot = p, width = 10, height = 7, units = "in", dpi = 300)
+p
+```
+
+
+
+```{r}
+library(tigris)
+library(sf)
+options(tigris_use_cache = TRUE)
+
+temp_dir <- tempdir()
+options(tempdir = temp_dir)
+
+iowa_counties <- counties(state = "IA", class = "sf")
+print(iowa_counties)
+iowa_crs <- st_crs(iowa_counties)
+
+```
+
+
+```{r}
+final_data$County[final_data$County == "Carrol"] <- "Carroll"
+final_data$County[final_data$County == "Monrtgomery"] <- "Montgomery"
+iowa_counties$NAME[iowa_counties$NAME=="O'Brien"]<-"Obrien"
+```
+
+```{r}
+ggplot() + 
+  geom_sf(data = iowa_counties,col = "navy" , fill = "white") + 
+  theme_bw() +
+  geom_sf_text(data = iowa_counties,mapping = aes(label = NAME),size = 1.2) +
+  ggtitle("Iowa")
+
+```
+#Spatial Neighbours and spatial Neighbourhood Graph :
+```{r}
+library(sp)
+library(geosphere)
+library(spdep)
+# Convert sf object to Spatial object for compatibility with spdep functions
+full_poly <- as_Spatial(iowa_counties)
+
+# Calculate the centroids of the counties (using sf functions)
+centroids <- st_centroid(iowa_counties)
+
+# Extract coordinates of the centroids
+centroid_coords <- st_coordinates(centroids)
+
+# Compute the pairwise distance matrix 
+dist_matrix <- distm(centroid_coords, fun = distHaversine)
+
+# Set the distance threshold 
+distance_threshold <- 60  # Adjust to the required distance
+
+
+
+# Create a neighbor list based on the distance threshold
+neighbors <- dnearneigh(centroid_coords, 0, distance_threshold, longlat = TRUE)
+
+# Export neighbor list to INLA format
+nb2INLA("iowa.graph", neighbors)
+
+# Generate file path for the adjacency graph
+iowa.adj <- paste(getwd(), "/iowa.graph", sep = "")
+
+# Convert neighbor list to spatial weights list
+wmat <- nb2listw(neighbors, style = "B", zero.policy = TRUE)
+
+# Plot the polygon map
+plot(st_geometry(iowa_counties), border = "navy")
+
+# Add neighbor links to the plot
+plot(wmat, centroid_coords, pch = 19, cex = 0.6, add = TRUE, col = "maroon")
+
+```
+
+Merging Data :
+
+```{r}
+iowa_counties <- iowa_counties %>%
+  left_join(final_data, by = c( "NAME"="County" ))
+iowa_counties
+```
+
+```{r}
+iowa_counties <- iowa_counties %>%
+  rename( County=NAME)
+```
+
+checkup on neighbors: 
+
+```{r}
+summary(neighbors)
+
+```
+
+```{r}
+# Load necessary libraries
+library(sf)
+library(tmap)
+library(dplyr)
+library(RColorBrewer)
+
+
+# Step 1: Aggregate corn yield data by county over the 14 years
+aggregated_corn_yield <- iowa_counties%>%
+  group_by(NAME) %>%
+  summarize(Total_Corn_Yield = sum(Corn_Yield, na.rm = TRUE))
+
+
+# Step 3: Set the tmap mode to plotting
+tmap_mode("plot")
+
+# Step 4: Create the map with a darker color palette
+corn_yield_map <- tm_shape(aggregated_corn_yield) +
+  tm_polygons("Total_Corn_Yield", 
+              title = "Total Corn Yield ",
+              palette = "YlOrBr", 
+              style = "quantile",
+              border.col = "gray40",  # Dark gray borders for counties
+              border.alpha = 0.5) +  # Semi-transparent borders
+  tm_layout(
+    title = "Total Corn Yield in Iowa by County (2010-2023)",
+    title.position = c("center", "top"),
+    legend.outside = TRUE,
+    legend.title.size = 1.2,
+    legend.text.size = 0.8,
+    legend.bg.color = "white",
+    legend.bg.alpha = 0.8,
+    frame = FALSE,  # No frame around the map
+    bg.color = "white",  # White background
+    inner.margins = c(0.1, 0.1, 0.1, 0.1),  # Margins for title and legend
+    fontfamily = "sans"  # Font family for text
+  )
+
+# Step 5: Print the map
+print(corn_yield_map)
+
+# Step 6: Save the map as an image file
+tmap_save(corn_yield_map, "iowa_corn_yield_map_classy.png", width = 10, height = 7, units = "in", dpi = 300)
+
+```
+
+
+
+
+Moran's I and Geary's C, for the sum of corn yield over the years :
+Moran's I:
+```{r}
+aggregated_data <- iowa_counties %>%
+  group_by(County) %>%
+  summarize(Total_Corn_Yield = sum(Corn_Yield, na.rm = TRUE))
+
+morans_i <- moran.test(aggregated_data$Total_Corn_Yield, wmat)
+morans_i
+
+moran.plot(x = aggregated_data$Total_Corn_Yield,listw = wmat,quiet = F)
+
+```
+
+
+```{r}
+# Load necessary libraries
+library(spdep)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+
+
+# Compute the spatially lagged values
+lagged_values <- lag.listw(wmat, aggregated_data$Total_Corn_Yield)
+
+# Create a data frame for plotting
+plot_data <- data.frame(
+  Total_Corn_Yield = aggregated_data$Total_Corn_Yield,
+  Lagged_Values = lagged_values,
+  County = aggregated_data$County
+)
+
+
+
+# Create the Moran scatterplot using ggplot2
+moran_plot<-ggplot(plot_data, aes(x = Total_Corn_Yield, y = Lagged_Values, label = County)) +
+  geom_point(color = "navy", size = 3) +
+  geom_text_repel(size = 3) + # Using ggrepel for better text positioning
+  geom_smooth(method = "lm", color = "maroon", se = FALSE) + # Add the regression line
+  geom_vline(xintercept = mean(plot_data$Total_Corn_Yield), linetype = "dashed", color = "grey") + # Mean line
+  geom_hline(yintercept = mean(plot_data$Lagged_Values), linetype = "dashed", color = "grey") + # Mean line
+  labs(
+    title = "Moran Scatterplot",
+    x = "Total Corn Yield",
+    y = "Spatial Lag of Total Corn Yield"
+  ) +
+  theme_minimal(base_size = 10) + # Use a minimal theme for a clean look
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"), # Center and bold the title
+    axis.title = element_text(face = "bold"), # Bold the axis titles
+    panel.grid.major = element_line(color = "grey", size = 0.2), # Light grid lines
+    panel.grid.minor = element_blank() # No minor grid lines
+  )
+
+```
+
+Geary's C :
+
+```{r}
+gearys_c <- geary.test(aggregated_data$Total_Corn_Yield, wmat)
+gearys_c
+```
+##Local Moran's I :
+
+
+```{r}
+library(dplyr)
+library(spdep)
+library(sf)
+library(ggplot2)
+
+
+# Step 1: Aggregate corn yield by county across all years
+aggregated_data <- final_data %>%
+  group_by(County) %>%
+  summarize(Total_Corn_Yield = sum(Corn_Yield, na.rm = TRUE))
+
+# Ensure that the order of rows in aggregated_data matches the spatial weights matrix nb
+aggregated_data <- aggregated_data %>%
+  arrange(County)
+
+# Step 2: Calculate Local Moran's I
+lw1 <- nb2listw(neighbors, style="W")
+local_morans_i <- localmoran(aggregated_data$Total_Corn_Yield, lw1)
+
+# Convert local_morans_i to a data frame
+local_morans_i_df <- as.data.frame(local_morans_i)
+
+# Add a column with the County names
+local_morans_i_df$County <- aggregated_data$County
+
+# Step 3: Merge Local Moran's I results with the sf object
+iowa_counties2 <- iowa_counties %>%
+  left_join(local_morans_i_df, by = c("County"="County"))
+
+
+
+# Define a custom color palette
+breaks <- c(-Inf, -0.5, -0.25, 0, 0.25, 0.5, Inf)
+
+# Define labels for each bin
+labels <- c("Very Negative", "Negative", "Slightly Negative", "Slightly Positive", "Positive", "Very Positive")
+
+# Create a new variable representing the bins
+iowa_counties2$Ii_bin <- cut(iowa_counties2$Ii, breaks = breaks, labels = labels)
+
+# Define a custom color palette for each category
+custom_palette <- c("#2B3D4F", "#4F628E", "#6C7691", "#A4838D", "#882D43", "#C66B6E")
+
+map_plot<-ggplot(data = iowa_counties2) +
+  geom_sf(aes(fill = Ii_bin), color = "gray30", size = 0.1) +  # Add a thin gray border around counties
+  scale_fill_manual(values = setNames(custom_palette, labels), name = "Local Moran's I") +  # Use custom color palette
+  theme_minimal() +
+  theme(legend.position = "left",  # Move legend to the bottom
+        legend.key.height = unit(1, "cm"),  # Increase legend key height
+        legend.text = element_text(size = 10),  # Adjust legend text size
+        plot.title = element_text(size = 14, face = "bold", hjust = 0.5)) +  # Adjust title
+  labs(title = "Local Moran's I for Corn Yield in Iowa")
+
+ggsave("locmoran.png", plot = map_plot,width=6,height=5 ,dpi = 300)
+```
+
+
+
+
+```{r}
+# Define breaks for binning the p-values
+breaks <- c(-Inf, 0.05, Inf)
+
+# Define labels for each bin
+labels <- c("Less than 0.05", "Above 0.05")
+
+# Create a new variable representing the bins
+iowa_counties2$`Pr(z != E(Ii))`<-as.numeric(iowa_counties2$`Pr(z != E(Ii))`)
+iowa_counties2$P_Value_Bin <- cut(iowa_counties2$`Pr(z != E(Ii))`, breaks = breaks, labels = labels)
+
+# Define a custom color palette for each category
+custom_palette <- c("#2B3D4F", "#C66B6E")  # Adjust colors if needed
+
+map_plot <- ggplot(data = iowa_counties2) +
+  geom_sf(aes(fill = P_Value_Bin), color = "gray30", size = 0.1) +  # Add a thin gray border around counties
+  scale_fill_manual(values = setNames(custom_palette, labels), name = "P-Value of LMI") +  # Use custom color palette
+  theme_minimal() +
+  theme(legend.position = "left",  # Move legend to the bottom
+        legend.key.height = unit(0.7, "cm"),  # Increase legend key height
+        legend.text = element_text(size = 6),  # Adjust legend text size
+        plot.title = element_text(size = 8, face = "bold", hjust = 0.5)) +  # Adjust title
+  labs(title = "P-Value of Local Moran's I for Corn Yield in Iowa")  # Adjust title if needed
+
+ggsave("locmoran.png", plot = map_plot, width = 6, height = 5, dpi = 300)
+map_plot
+```
+
+```{r}
+library(gridExtra)
+
+# Define breaks for binning the p-values
+breaks_p <- c(-Inf, 0.05, Inf)
+
+# Define labels for each bin
+labels_p <- c("Less than 0.05", "Above 0.05")
+
+# Create a new variable representing the bins for p-values
+iowa_counties2$P_Value_Bin <- cut(iowa_counties2$`Pr(z != E(Ii))`, breaks = breaks_p, labels = labels_p)
+
+# Define a custom color palette for each category of p-values
+custom_palette_p <- c("#2B3D4F", "#C66B6E")  # Adjust colors if needed
+
+# Map for p-values
+map_plot_p <- ggplot(data = iowa_counties2) +
+  geom_sf(aes(fill = P_Value_Bin), color = "gray30", size = 0.1) +  # Add a thin gray border around counties
+  scale_fill_manual(values = setNames(custom_palette_p, labels_p), name = "P-Value LMI") +  # Use custom color palette
+  theme_minimal() +
+  theme(legend.position = "left",  # Move legend to the bottom
+        legend.key.height = unit(0.5, "cm"),  # Increase legend key height
+        legend.text = element_text(size = 6),  # Adjust legend text size
+        plot.title = element_text(size = 8, face = "bold", hjust = 0.5)) +  # Adjust title
+  labs(title = "P-Value of Local Moran's I for Corn Yield in Iowa")  # Adjust title if needed
+
+# Define breaks for binning the Moran's I values
+breaks_m <- c(-Inf, -0.5, -0.25, 0, 0.25, 0.5, Inf)
+
+# Define labels for each bin
+labels_m <- c("Very Negative", "Negative", "Slightly Negative", "Slightly Positive", "Positive", "Very Positive")
+
+# Create a new variable representing the bins for Moran's I values
+iowa_counties2$Ii_Bin <- cut(iowa_counties2$Ii, breaks = breaks_m, labels = labels_m)
+
+# Define a custom color palette for each category of Moran's I values
+custom_palette_m <- c("#2B3D4F", "#4F628E", "#6C7691", "#A4838D", "#882D43", "#C66B6E")  # Adjust colors if needed
+
+# Map for Moran's I values
+map_plot_m <- ggplot(data = iowa_counties2) +
+  geom_sf(aes(fill = Ii_Bin), color = "gray30", size = 0.1) +  # Add a thin gray border around counties
+  scale_fill_manual(values = setNames(custom_palette_m, labels_m), name = "Moran's I") +  # Use custom color palette
+  theme_minimal() +
+  theme(legend.position = "left",  # Move legend to the bottom
+        legend.key.height = unit(0.5, "cm"),  # Increase legend key height
+        legend.text = element_text(size = 6),  # Adjust legend text size
+        plot.title = element_text(size = 8, face = "bold", hjust = 0.5)) +  # Adjust title
+  labs(title = "Moran's I for Corn Yield in Iowa")  # Adjust title if needed
+
+# Combine the two maps
+combined_plot <- grid.arrange(map_plot_m, map_plot_p, ncol = 2)
+
+# Save the combined plot
+ggsave("combined_maps.png", plot = combined_plot, width = 12, height = 12, dpi = 300)
+
+```
+
+#Getis Ord's G :
+
+```{r}
+library(dplyr)
+library(spdep)
+library(sf)
+library(ggplot2)
+
+# Assuming 'final_data' is your data frame with 'Corn_Yield' and 'County' columns
+# and 'iowa_counties' is your sf object with spatial information
+
+# Step 1: Aggregate corn yield by county across all years
+aggregated_data <- final_data %>%
+  group_by(County) %>%
+  summarize(Total_Corn_Yield = sum(Corn_Yield, na.rm = TRUE)) %>%
+  arrange(County)  # Ensure that the order of rows matches the spatial weights matrix
+
+# Step 2: Calculate Getis-Ord's G
+lw1 <- nb2listw(neighbors, style="W")
+getis_ords_g <- localG(aggregated_data$Total_Corn_Yield, lw1)
+
+# Convert getis_ords_g to a data frame and add a column with the County names
+getis_ords_g_df <- as.data.frame(getis_ords_g)
+getis_ords_g_df$County <- aggregated_data$County
+
+# Step 3: Merge Getis-Ord's G results with the sf object
+iowa_counties2 <- iowa_counties %>%
+  left_join(getis_ords_g_df, by = c("County"="County"))
+
+# Define breaks and labels for visualization
+breaks_m <- c(-Inf, -0.5, -0.25, 0, 0.25, 0.5, Inf)
+
+# Define labels for each bin
+labels_m <- c("Very Negative", "Negative", "Slightly Negative", "Slightly Positive", "Positive", "Very Positive")
+
+# Create a new variable representing the bins
+iowa_counties2$x<-as.numeric(iowa_counties2$x)
+iowa_counties2$G_bin <- cut(iowa_counties2$x, breaks = breaks_m, labels = labels_m)
+
+# Define a custom color palette for each category
+custom_palette <- c("#2B3D4F", "#4F628E", "#6C7691", "#A4838D", "#882D43", "#C66B6E")
+
+# Plotting the results
+map_plot <- ggplot(data = iowa_counties2) +
+  geom_sf(aes(fill = G_bin), color = "gray30", size = 0.1) +
+  scale_fill_manual(values = setNames(custom_palette, labels_m), name = "Getis-Ord's G") +
+  theme_minimal() +
+  theme(legend.position = "left",
+        legend.key.height = unit(0.5, "cm"),
+        legend.text = element_text(size = 6),
+        plot.title = element_text(size = 8, face = "bold", hjust = 0.5)) +
+  labs(title = "Getis-Ord's G for Corn Yield in Iowa")
+
+# Save the plot
+ggsave("getis_ords_g.png", plot = map_plot, width = 6, height = 5, dpi = 300)
+
+```
+
+
+```{r}
+map_plot
+```
+```{r}
+
+library(gridExtra)
+
+
+getis_ords_g <- localG_perm(aggregated_data$Total_Corn_Yield, lw1, nsim = 100, zero.policy = TRUE)
+
+# Convert Getis-Ord's G results to a data frame
+getis_ords_g_df <- as.data.frame(attr(getis_ords_g, "internals"))
+getis_ords_g_df$County <- aggregated_data$County
+
+# Step 3: Merge Getis-Ord's G results with the sf object
+iowa_counties3 <- iowa_counties %>%
+  left_join(getis_ords_g_df, by = c("County" = "County"))
+
+
+# Define breaks for binning the p-values
+breaks_p <- c(-Inf, 0.05, Inf)
+labels_p <- c("Less than 0.05", "Above 0.05")
+
+# Create a new variable representing the bins for p-values
+iowa_counties3$`Pr(z != E(Gi))` <- as.numeric(iowa_counties3$`Pr(z != E(Gi))`)
+iowa_counties3$P_Value_Bin <- cut(iowa_counties3$`Pr(z != E(Gi))`, breaks = breaks_p, labels = labels_p)
+
+# Define a custom color palette for each category of p-values
+custom_palette_p <- c("#2B3D4F", "#C66B6E")
+
+# Plotting the results for p-values
+map_plot_p <- ggplot(data = iowa_counties3) +
+  geom_sf(aes(fill = P_Value_Bin), color = "gray30", size = 0.1) +
+  scale_fill_manual(values = setNames(custom_palette_p, labels_p), name = "P-Value Getis") +
+  theme_minimal() +
+  theme(legend.position = "left",
+        legend.key.height = unit(0.5, "cm"),
+        legend.text = element_text(size = 6),
+        plot.title = element_text(size = 8, face = "bold", hjust = 0.5)) +
+  labs(title = "P-Value of Getis-Ord's G for Corn Yield in Iowa")
+
+# Combine the two plots side by side
+combined_plot <- grid.arrange(map_plot, map_plot_p, ncol = 2)
+
+# Save the combined plot
+ggsave("getis_ords_g_combined.png", plot = combined_plot, width = 12, height = 5, dpi = 300)
+
+```
+
+### LISA decomposition:
+
+```{r}
+library(dplyr)
+library(spdep)
+library(sf)
+library(ggplot2)
+
+# Step 1: Aggregate corn yield by county across all years
+aggregated_data <- final_data %>%
+  group_by(County) %>%
+  summarize(Total_Corn_Yield = sum(Corn_Yield, na.rm = TRUE))
+
+# Ensure that the order of rows in aggregated_data matches the spatial weights matrix nb
+aggregated_data <- aggregated_data %>%
+  arrange(County)
+
+# Step 2: Calculate Local Moran's I
+lw1 <- nb2listw(neighbors, style="W")
+local_morans_i <- localmoran(aggregated_data$Total_Corn_Yield, lw1)
+
+# Convert local_morans_i to a data frame
+local_morans_i_df <- as.data.frame(local_morans_i)
+
+# Add a column with the County names
+local_morans_i_df$County <- aggregated_data$County
+
+# Extract quadrants
+# Assuming that the quadrant information is stored as an attribute of the matrix
+quadrants <- attributes(local_morans_i)$quadr
+
+# Convert quadrants to a data frame
+quadrants_df <- as.data.frame(quadrants)
+quadrants_df$County <- aggregated_data$County
+
+# Step 3: Merge Local Moran's I results with the sf object
+iowa_counties2 <- iowa_counties %>%
+  left_join(quadrants_df, by = c("County" = "County"))
+
+# Step 4: Define color palette for the quadrants
+quadrant_colors <- c("High-High" = "#2B3D4F", "High-Low" = "#4F628E", "Low-High" = "#6C7691", "Low-Low" = "#A4838D")
+
+# Step 5: Map the LISA results
+lisa_plot <- ggplot(data = iowa_counties2) +
+  geom_sf(aes(fill = factor(pysal)), color = "gray30", size = 0.1) +  # Assuming pysal contains the quadrant information
+  scale_fill_manual(values = quadrant_colors, name = "LISA Categories") +  # Use custom color palette
+  theme_minimal() +
+  theme(legend.position = "left",  # Move legend to the left
+        legend.key.height = unit(0.7, "cm"),  # Increase legend key height
+        legend.text = element_text(size = 6),  # Adjust legend text size
+        plot.title = element_text(size = 8, face = "bold", hjust = 0.5)) +  # Adjust title
+  labs(title = "LISA (Local Moran's I) for Corn Yield in Iowa")
+
+print(lisa_plot)
+
+```
+
+combine LISA and p values :
+
+```{r}
+combined_plot2<-grid.arrange(lisa_plot,map_plot,  ncol = 1)
+```
+
+
+
+```{r}
+ggsave("combined_plot2.png", plot = combined_plot2, width = 8, height = 5, dpi = 300)
+
+```
+
+
+
+#Modeling Phase :
+#Preparing the data for modeling:
+
+```{r}
+library(INLA)
+library(RColorBrewer)
+library(tmap)
+library(patchwork)
+```
+
+
+```{r}
+### preparing the INLA data frame with O, E, 3 ids
+S <- length(unique(final_data$County))
+T <- length(unique(final_data$YEAR))
+
+t.from <- min(final_data$YEAR)
+t.to <- max(final_data$YEAR)
+
+
+Data <- final_data[order(final_data$YEAR,final_data$County),]
+
+Data.INLA <- data.frame(O = Data$Corn_Yield,
+                        E = Data[, c("Temp","precipitation","Hum","dlh","wind","DNI")],
+                        ID.area = rep(1:S,T),
+                        ID.year = rep(1:T,each=S),
+                        ID.area.year = seq(1,T*S))
+
+### Neighboring structure
+g <- inla.read.graph("iowa.graph")
+
+Q.xi <- matrix(0, g$n, g$n)
+for (i in 1:g$n){
+  Q.xi[i,i]=g$nnbs[[i]]
+  Q.xi[i,g$nbs[[i]]]=-1
+}
+
+Q.Leroux <- diag(S)-Q.xi
+
+### temporal structure matrix 
+D1 <- diff(diag(T),differences=1)
+Q.gammaRW1 <- t(D1)%*%D1
+
+D2 <- diff(diag(T),differences=2)
+Q.gammaRW2 <- t(D2)%*%D2
+
+
+##  Define appropriate hyperprior distributions using the "expression()" function   
+##	- Unif(0,Inf) for standard deviations							                              
+##	- Unif(0,1) for the spatial smoothing parameter	
+
+sdunif="expression:
+  logdens=-log_precision/2;
+  return(logdens)"                
+
+lunif = "expression:
+    a = 1;
+    b = 1;
+    beta = exp(theta)/(1+exp(theta));
+    logdens = lgamma(a+b)-lgamma(a)-lgamma(b)+(a-1)*log(beta)+(b-1)*log(1-beta);
+    log_jacobian = log(beta*(1-beta));
+    return(logdens+log_jacobian)"
+
+
+### posterior patterns distribution
+compute.patterns <- TRUE  ## Set compute.patterns=FALSE if posterior patterns are not required
+
+if(compute.patterns){
+  source("posterior_lincombs.R")
+}else{
+  all.lc <- NULL
+}
+
+strategy <- "simplified.laplace"  ## Set strategy="simplified.laplace" for more accurate  results ("gaussian")
+```
+
+
+we are considering the models Type 4 with RW1:
+### Type IV interaction and RW1 prior for time 
+
+#Model 3 :
+
+```{r}
+R <- kronecker(Q.gammaRW1,Q.xi)
+r.def <- S+T-1
+A1 <- kronecker(matrix(1,1,T),diag(S))
+A2 <- kronecker(diag(T),matrix(1,1,S))
+A.constr <- rbind(A1[-1,],A2[-1,])
+
+f.TypeIV.RW1_1 <- O ~ E.precipitation+E.Temp+E.Hum+E.dlh+E.wind+E.DNI+f(ID.area, model="generic1", Cmatrix=Q.Leroux, constr=TRUE,hyper=list(prec=list(prior=sdunif),beta=list(prior=lunif))) +
+  f(ID.year, model="rw1", constr=TRUE,
+    hyper=list(prec=list(prior=sdunif))) +
+  f(ID.area.year, model="generic0", Cmatrix=R, rankdef=r.def,
+    constr=TRUE, hyper=list(prec=list(prior=sdunif)),
+    extraconstr=list(A=A.constr, e=rep(0,S+T-2)))
+
+TypeIV.RW1_1 <- inla(f.TypeIV.RW1_1, family="gaussian", data=Data.INLA, 
+                   control.predictor=list(compute=TRUE, cdf=c(log(1))),
+                   control.compute=list(dic=TRUE, cpo=TRUE, waic=TRUE),
+                   lincomb=all.lc,control.family=list(hyper=list(prec=list(prior="gaussian", param=c(1,0.01)))),
+                   control.inla=list(strategy=strategy))
+```
+
+# Model 1 :
+
+```{r}
+
+R <- kronecker(Q.gammaRW1,Q.xi)
+r.def <- S+T-1
+A1 <- kronecker(matrix(1,1,T),diag(S))
+A2 <- kronecker(diag(T),matrix(1,1,S))
+A.constr <- rbind(A1[-1,],A2[-1,])
+
+f.TypeIV.RW1_2 <- O ~ E.precipitation+E.Temp+E.Hum+E.dlh+E.wind+E.DNI+f(ID.area, model="generic1", Cmatrix=Q.Leroux, constr=TRUE,hyper=list(prec=list(prior=sdunif),beta=list(prior=lunif))) +
+  f(ID.year, model="rw1", constr=TRUE,
+    hyper=list(prec=list(prior=sdunif))) +
+  f(ID.area.year, model="generic0", Cmatrix=R, rankdef=r.def,
+    constr=TRUE, hyper=list(prec=list(prior=sdunif)),
+    extraconstr=list(A=A.constr, e=rep(0,S+T-2)))
+
+TypeIV.RW1_2 <- inla(f.TypeIV.RW1_2, family="gaussian", data=Data.INLA, 
+                   control.predictor=list(compute=TRUE, cdf=c(log(1))),
+                   control.compute=list(dic=TRUE, cpo=TRUE, waic=TRUE),
+                   lincomb=all.lc
+                   ,control.family=list(hyper=list(prec=list(prior="loggamma", param=c(1,0.01)))),
+                   control.inla=list(strategy=strategy))
+```
+
+#Model 2 :
+```{r}
+
+R <- kronecker(Q.gammaRW1,Q.xi)
+r.def <- S+T-1
+A1 <- kronecker(matrix(1,1,T),diag(S))
+A2 <- kronecker(diag(T),matrix(1,1,S))
+A.constr <- rbind(A1[-1,],A2[-1,])
+
+f.TypeIV.RW1_3 <- O ~ E.precipitation+E.Temp+E.Hum+E.dlh+E.wind+E.DNI+f(ID.area, model="generic1", Cmatrix=Q.Leroux, constr=TRUE,hyper=list(prec=list(prior=sdunif),beta=list(prior=lunif))) +
+  f(ID.year, model="rw1", constr=TRUE,
+    hyper=list(prec=list(prior=sdunif))) +
+  f(ID.area.year, model="generic0", Cmatrix=R, rankdef=r.def,
+    constr=TRUE, hyper=list(prec=list(prior=sdunif)),
+    extraconstr=list(A=A.constr, e=rep(0,S+T-2)))
+
+TypeIV.RW1_3 <- inla(f.TypeIV.RW1_3, family="gaussian", data=Data.INLA, 
+                   control.predictor=list(compute=TRUE, cdf=c(log(1))),
+                   control.compute=list(dic=TRUE, cpo=TRUE, waic=TRUE),
+                   lincomb=all.lc,
+                   control.family=list(hyper=list(prec=list(prior="loggamma",param = c(0.01, 0.01)))),
+                   control.inla=list(strategy=strategy))
+
+
+```
+
+
+#Model 4:
+
+```{r}
+R <- kronecker(Q.gammaRW1,Q.xi)
+r.def <- S+T-1
+A1 <- kronecker(matrix(1,1,T),diag(S))
+A2 <- kronecker(diag(T),matrix(1,1,S))
+A.constr <- rbind(A1[-1,],A2[-1,])
+
+f.TypeIV.RW1_7 <- O ~ E.precipitation+E.Temp+E.Hum+E.dlh+E.wind+E.DNI+f(ID.area, model="generic1", Cmatrix=Q.Leroux, constr=TRUE,hyper=list(prec=list(prior=sdunif),beta=list(prior=lunif))) +
+  f(ID.year, model="rw1", constr=TRUE,
+    hyper=list(prec=list(prior=sdunif))) +
+  f(ID.area.year, model="generic0", Cmatrix=R, rankdef=r.def,
+    constr=TRUE, hyper=list(prec=list(prior=sdunif)),
+    extraconstr=list(A=A.constr, e=rep(0,S+T-2)))
+
+TypeIV.RW1_7 <- inla(f.TypeIV.RW1_7, family="gaussian", data=Data.INLA, 
+                   control.predictor=list(compute=TRUE, cdf=c(log(1))),
+                   control.compute=list(dic=TRUE, cpo=TRUE, waic=TRUE),
+                   lincomb=all.lc,
+                   control.family=list(hyper=list(prec=list(prior="gaussian",param = c(0.01, 0.01)))),
+                   control.inla=list(strategy=strategy))
+
+
+```
+
+
+Choosing the best model among them :
+
+```{r}
+MODELS <- list(Model3=TypeIV.RW1_1,
+               Model1=TypeIV.RW1_2,
+               Model2=TypeIV.RW1_3,
+               Model4=TypeIV.RW1_7
+               )
+
+DIC <- function(x){
+  data.frame(mean.deviance=x$dic$mean.deviance, ## posterior mean deviance
+             p.eff=x$dic$p.eff,                 ## effective number of parameters
+             DIC=x$dic$dic,                     ## Deviance Information Criterion
+             WAIC=x$waic$waic,                  ## Watanabe-Akaike information criterion
+             LS=-sum(log(x$cpo$cpo)),           ## Logarithmic Score (see inla.cpo function)
+             Time=x$cpu.used[4])
+}
+
+do.call(rbind,lapply(MODELS, DIC))
+```
+
+###Selected model parameters and analysis: 
+
+```{r}
+Model <- TypeIV.RW1_1
+
+
+```
+
+
+
+```{r}
+print(summary(Model))
+
+```
+
+```{r}
+# Extracting mean and standard deviation for fixed effect
+fixed_summary <- summary(Model)$fixed
+alpha_mean <- fixed_summary[1, "mean"]
+alpha_sd <- fixed_summary[1, "sd"]
+
+# Calculating hyperparameter statistics
+sigma2_S_mean <- inla.emarginal(function(x) 1/x, Model$marginals.hyperpar$"Precision for ID.area")
+sigma2_S_sd <- sqrt(inla.emarginal(function(x) 1/(x^2), Model$marginals.hyperpar$"Precision for ID.area") - sigma2_S_mean^2)
+
+lambda_S_mean <- Model$summary.hyperpar[2, 1]
+lambda_S_sd <- Model$summary.hyperpar[2, 2]
+
+sigma2_T_mean <- inla.emarginal(function(x) 1/x, Model$marginals.hyperpar$"Precision for ID.year")
+sigma2_T_sd <- sqrt(inla.emarginal(function(x) 1/(x^2), Model$marginals.hyperpar$"Precision for ID.year") - sigma2_T_mean^2)
+
+sigma2_ST_mean <- inla.emarginal(function(x) 1/x, Model$marginals.hyperpar$"Precision for ID.area.year")
+sigma2_ST_sd <- sqrt(inla.emarginal(function(x) 1/(x^2), Model$marginals.hyperpar$"Precision for ID.area.year") - sigma2_ST_mean^2)
+
+# Combine results into a data frame
+table <- data.frame(
+  par = c("alpha", "sigma2_S", "lambda_S", "sigma2_T", "sigma2_ST"),
+  mean.model = c(alpha_mean, sigma2_S_mean, lambda_S_mean, sigma2_T_mean, sigma2_ST_mean),
+  sd.model = c(alpha_sd, sigma2_S_sd, lambda_S_sd, sigma2_T_sd, sigma2_ST_sd)
+)
+
+print(table)
+```
+
+
+```{r}
+summary(TypeIV.RW1_1$summary.fitted.values)
+```
+
+
+
+### Percentage of explained variability by the spatial, temporal and spatio-temporal patterns
+
+```{r}
+alpha <- Model$summary.lincomb.derived$mean[1]
+risks.S <- matrix(Model$summary.lincomb.derived$mean[2:(S+1)],S,T)
+risks.T <- t(matrix(Model$summary.lincomb.derived$mean[(S+2):(S+T+1)],T,S))
+risks.ST <- matrix(Model$summary.lincomb.derived$'mean'[(S+T+2):(S+T+S*T+1)], S, T)
+
+varS <-var(as.vector(risks.S))
+varT <- var(as.vector(risks.T))
+varST <- var(as.vector(risks.ST))
+c(varS,varT,varST)/(varS+varT+varST)
+```
+
